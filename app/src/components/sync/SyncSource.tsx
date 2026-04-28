@@ -126,37 +126,50 @@ export function SyncSource() {
   }, []);
 
   useEffect(() => {
-    const slackState = searchParams.get("slack");
-    if (!slackState) {
-      return;
-    }
+    const providers = [
+      { key: "slack", label: "Slack" },
+      { key: "gmail", label: "Gmail" },
+      { key: "github", label: "GitHub" },
+    ] as const;
 
-    if (slackState === "connected") {
-      toast.success("Slack connected.", {
-        description: "The installation completed and the first sync has been triggered.",
+    for (const provider of providers) {
+      const providerState = searchParams.get(provider.key);
+      if (!providerState) {
+        continue;
+      }
+
+      if (providerState === "connected") {
+        toast.success(`${provider.label} connected.`, {
+          description: "The installation completed and the first sync has been triggered.",
+        });
+        loadSources().catch((error) => console.error(error));
+        return;
+      }
+
+      if (providerState === "connected_with_sync_warning") {
+        toast.success(`${provider.label} connected.`, {
+          description:
+            "The install completed, but the first sync needs another try. Use Run Sync Now after the page loads.",
+        });
+        loadSources().catch((error) => console.error(error));
+        return;
+      }
+
+      toast.error(`${provider.label} connection was not completed.`, {
+        description: `Reason: ${providerState.replace(/_/g, " ")}`,
       });
-      loadSources().catch((error) => console.error(error));
       return;
     }
-
-    if (slackState === "connected_with_sync_warning") {
-      toast.success("Slack connected.", {
-        description:
-          "The install completed, but the first sync needs another try. Use Run Sync Now after the page loads.",
-      });
-      loadSources().catch((error) => console.error(error));
-      return;
-    }
-
-    toast.error("Slack connection was not completed.", {
-      description: `Reason: ${slackState.replace(/_/g, " ")}`,
-    });
   }, [searchParams]);
 
   const slackRedirectUrl = `${appOrigin}/api/integrations/slack/callback`;
   const slackEventsUrl = `${appOrigin}/api/integrations/slack/events`;
   const slackScopes =
-    "channels:history,channels:read,groups:history,groups:read,team:read,users:read";
+    "channels:history,channels:read,channels:join,groups:history,groups:read,im:history,im:read,mpim:history,mpim:read,team:read,users:read";
+  const gmailOrigin = appOrigin;
+  const gmailRedirectUrl = `${appOrigin}/api/integrations/gmail/callback`;
+  const githubRedirectUrl = `${appOrigin}/api/integrations/github/callback`;
+  const whatsappWebhookUrl = `${appOrigin}/api/integrations/whatsapp/webhook`;
 
   const copyToClipboard = async (value: string, label: string) => {
     try {
@@ -213,15 +226,63 @@ export function SyncSource() {
     return payload.source;
   };
 
-  const startSlackOAuth = async () => {
-    const response = await fetch("/api/integrations/slack/auth");
+  const startOAuthFlow = async (platform: "slack" | "gmail" | "github") => {
+    const response = await fetch(`/api/integrations/${platform}/auth`);
     const payload = (await response.json()) as { url?: string; error?: string };
 
     if (!response.ok || !payload.url) {
-      throw new Error(payload.error ?? `Slack auth failed with status ${response.status}`);
+      throw new Error(payload.error ?? `${platform} auth failed with status ${response.status}`);
     }
 
     window.location.assign(payload.url);
+  };
+
+  const runIntegrationSync = async (platform: "slack" | "gmail" | "github" | "notion" | "whatsapp") => {
+    const response = await fetch(`/api/integrations/${platform}/sync`, {
+      method: "POST",
+    });
+    const payload = (await response.json()) as {
+      result?: { syncedChannels?: number; syncedMessages?: number; syncedItems?: number };
+      error?: string;
+    };
+
+    if (!response.ok) {
+      throw new Error(payload.error ?? `${platform} sync failed with status ${response.status}`);
+    }
+
+    return payload.result ?? {};
+  };
+
+  const disconnectIntegration = async (source: SourceRecord) => {
+    if (source.platform === "slack") {
+      const response = await fetch("/api/integrations/slack/install", { method: "DELETE" });
+      if (!response.ok) {
+        throw new Error(`Slack disconnect failed with status ${response.status}`);
+      }
+      return;
+    }
+
+    if (
+      source.platform === "gmail" ||
+      source.platform === "github" ||
+      source.platform === "notion" ||
+      source.platform === "whatsapp"
+    ) {
+      const response = await fetch(`/api/integrations/${source.platform}/install`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(`${source.name} disconnect failed with status ${response.status}`);
+      }
+      return;
+    }
+
+    const response = await fetch(`/api/sources/${source.id}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      throw new Error(`${source.name} disconnect failed with status ${response.status}`);
+    }
   };
 
   const handleConfiguredConnect = async () => {
@@ -251,56 +312,81 @@ export function SyncSource() {
         configuration,
       );
 
-      if (configuringSource.platform === "slack") {
-        await startSlackOAuth();
+      if (
+        configuringSource.platform === "slack" ||
+        configuringSource.platform === "gmail" ||
+        configuringSource.platform === "github"
+      ) {
+        await startOAuthFlow(configuringSource.platform);
+        return;
+      }
+
+      if (configuringSource.platform === "notion" || configuringSource.platform === "whatsapp") {
+        const result = await runIntegrationSync(configuringSource.platform);
+        await loadSources();
+        setConfiguringSource(null);
+        toast.success(`${configuringSource.name} connected.`, {
+          description:
+            configuringSource.platform === "notion"
+              ? `${result.syncedItems ?? 0} Notion items were indexed.`
+              : "The WhatsApp business line was validated and webhook ingestion is ready.",
+        });
         return;
       }
 
       setConfiguringSource(null);
       toast.success(`${configuringSource.name} setup saved.`, {
-        description:
-          configuringSource.platform === "whatsapp"
-            ? "The credentials were stored and this connector will stay in the planned queue."
-            : "Sync can now use these credentials when we wire the live connector runtime.",
+        description: "The connector configuration was stored.",
       });
     } catch (error) {
       console.error(error);
       toast.error(`Unable to save ${configuringSource.name} setup.`, {
         description:
-          configuringSource.platform === "slack"
-            ? "Make sure the Slack app values are correct, then try the OAuth flow again."
-            : "The backend could not store that connector configuration yet.",
+          configuringSource.platform === "slack" ||
+          configuringSource.platform === "gmail" ||
+          configuringSource.platform === "github"
+            ? `Make sure the ${configuringSource.name} app values are correct, then try the OAuth flow again.`
+            : "The backend could not finish that connector setup yet.",
       });
     } finally {
       setConnectingId(null);
     }
   };
 
-  const handleSlackSync = async () => {
-    setConnectingId("slack-sync");
+  const handleSourceSync = async (
+    source: SourceRecord,
+    syncId = `${source.platform}-sync`,
+  ) => {
+    setConnectingId(syncId);
 
     try {
-      const response = await fetch("/api/integrations/slack/sync", {
-        method: "POST",
-      });
-      const payload = (await response.json()) as {
-        result?: { syncedChannels: number };
-        error?: string;
-      };
-
-      if (!response.ok) {
-        throw new Error(payload.error ?? `Slack sync failed with status ${response.status}`);
+      if (
+        source.platform !== "slack" &&
+        source.platform !== "gmail" &&
+        source.platform !== "github" &&
+        source.platform !== "notion" &&
+        source.platform !== "whatsapp"
+      ) {
+        throw new Error("This source does not have a sync flow yet.");
       }
 
+      const payload = await runIntegrationSync(source.platform);
       await loadSources();
-      toast.success("Slack sync finished.", {
-        description: `${payload.result?.syncedChannels ?? 0} channels were refreshed.`,
+      toast.success(`${source.name} sync finished.`, {
+        description:
+          payload.syncedChannels !== undefined
+            ? `${payload.syncedChannels} Slack conversations were refreshed.`
+            : payload.syncedMessages !== undefined
+              ? `${payload.syncedMessages} Gmail messages were indexed.`
+              : payload.syncedItems !== undefined
+                ? `${payload.syncedItems} records were indexed.`
+                : "The source refreshed successfully.",
       });
     } catch (error) {
       console.error(error);
-      toast.error("Unable to sync Slack right now.");
+      toast.error(`Unable to sync ${source.name} right now.`);
     } finally {
-      setConnectingId(null);
+      setConnectingId((currentValue) => (currentValue === syncId ? null : currentValue));
     }
   };
 
@@ -315,7 +401,6 @@ export function SyncSource() {
       if (!response.ok) {
         throw new Error(`Slack disconnect failed with status ${response.status}`);
       }
-
       await loadSources();
       toast.success("Slack disconnected.");
     } catch (error) {
@@ -330,19 +415,19 @@ export function SyncSource() {
     setConnectingId(source.id);
 
     try {
-      const updatedSource = await persistSourceUpdate(source, status);
+      if (status === "disconnected") {
+        await disconnectIntegration(source);
+        await loadSources();
+        toast.success(`${source.name} disconnected.`, {
+          description: "The connector was removed for this workspace.",
+        });
+        return;
+      }
 
-      toast.success(
-        status === "connected"
-          ? `${updatedSource.name} connected!`
-          : `${updatedSource.name} disconnected.`,
-        {
-          description:
-            status === "connected"
-              ? "Sync will begin indexing your data immediately."
-              : "The connector was disabled for this workspace.",
-        },
-      );
+      const updatedSource = await persistSourceUpdate(source, status);
+      toast.success(`${updatedSource.name} connected!`, {
+        description: "Sync will begin indexing your data immediately.",
+      });
     } catch (error) {
       console.error(error);
       toast.error("Unable to update that source.");
@@ -675,9 +760,132 @@ export function SyncSource() {
                       </p>
                       <p className="mt-2 text-xs text-text-muted">
                         Add these in Slack OAuth &amp; Permissions so Sync can read channels,
-                        history, team info, and members.
+                        auto-join public channels, read private channels where the app was invited,
+                        read direct messages it has access to, small private group chats, team
+                        info, and members. If you change scopes, disconnect and reconnect Slack so
+                        the new token includes them.
                       </p>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {configuringSource.platform === "gmail" && (
+                <div className="mb-6 rounded-2xl border border-sync-blue/20 bg-sync-blue/5 p-5 text-sm text-text-secondary">
+                  <div className="mb-3 flex items-center gap-2 font-semibold text-text-primary">
+                    <Link2 className="h-4 w-4 text-sync-blue" />
+                    Google OAuth setup
+                  </div>
+                  <div className="space-y-3">
+                    <div className="rounded-xl border border-border bg-surface/70 p-3">
+                      <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <span className="text-xs font-bold uppercase tracking-widest text-text-muted">
+                          Authorized JavaScript origin
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(gmailOrigin, "Gmail origin")}
+                          className="flex w-fit items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] font-bold text-text-primary hover:border-sync-blue/40 hover:text-sync-blue"
+                        >
+                          {copiedValue === "Gmail origin" ? (
+                            <Check className="h-3.5 w-3.5" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5" />
+                          )}
+                          Copy
+                        </button>
+                      </div>
+                      <p className="break-all font-mono text-xs text-text-primary">{gmailOrigin}</p>
+                    </div>
+
+                    <div className="rounded-xl border border-border bg-surface/70 p-3">
+                      <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <span className="text-xs font-bold uppercase tracking-widest text-text-muted">
+                          Authorized redirect URI
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(gmailRedirectUrl, "Gmail redirect URI")}
+                          className="flex w-fit items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] font-bold text-text-primary hover:border-sync-blue/40 hover:text-sync-blue"
+                        >
+                          {copiedValue === "Gmail redirect URI" ? (
+                            <Check className="h-3.5 w-3.5" />
+                          ) : (
+                            <Copy className="h-3.5 w-3.5" />
+                          )}
+                          Copy
+                        </button>
+                      </div>
+                      <p className="break-all font-mono text-xs text-text-primary">
+                        {gmailRedirectUrl}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {configuringSource.platform === "github" && (
+                <div className="mb-6 rounded-2xl border border-sync-blue/20 bg-sync-blue/5 p-5 text-sm text-text-secondary">
+                  <div className="mb-3 flex items-center gap-2 font-semibold text-text-primary">
+                    <Link2 className="h-4 w-4 text-sync-blue" />
+                    GitHub OAuth setup
+                  </div>
+                  <div className="rounded-xl border border-border bg-surface/70 p-3">
+                    <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="text-xs font-bold uppercase tracking-widest text-text-muted">
+                        Authorization callback URL
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(githubRedirectUrl, "GitHub redirect URI")}
+                        className="flex w-fit items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] font-bold text-text-primary hover:border-sync-blue/40 hover:text-sync-blue"
+                      >
+                        {copiedValue === "GitHub redirect URI" ? (
+                          <Check className="h-3.5 w-3.5" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                        Copy
+                      </button>
+                    </div>
+                    <p className="break-all font-mono text-xs text-text-primary">
+                      {githubRedirectUrl}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {configuringSource.platform === "whatsapp" && (
+                <div className="mb-6 rounded-2xl border border-sync-blue/20 bg-sync-blue/5 p-5 text-sm text-text-secondary">
+                  <div className="mb-3 flex items-center gap-2 font-semibold text-text-primary">
+                    <Link2 className="h-4 w-4 text-sync-blue" />
+                    WhatsApp webhook setup
+                  </div>
+                  <div className="rounded-xl border border-border bg-surface/70 p-3">
+                    <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="text-xs font-bold uppercase tracking-widest text-text-muted">
+                        Callback URL
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => copyToClipboard(whatsappWebhookUrl, "WhatsApp webhook URL")}
+                        className="flex w-fit items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] font-bold text-text-primary hover:border-sync-blue/40 hover:text-sync-blue"
+                      >
+                        {copiedValue === "WhatsApp webhook URL" ? (
+                          <Check className="h-3.5 w-3.5" />
+                        ) : (
+                          <Copy className="h-3.5 w-3.5" />
+                        )}
+                        Copy
+                      </button>
+                    </div>
+                    <p className="break-all font-mono text-xs text-text-primary">
+                      {whatsappWebhookUrl}
+                    </p>
+                    <p className="mt-2 text-xs text-text-muted">
+                      Use this in the Meta webhook configuration. For local testing, Meta also
+                      needs a public URL instead of `localhost`.
+                    </p>
                   </div>
                 </div>
               )}
@@ -752,23 +960,37 @@ export function SyncSource() {
                     <div className="absolute right-0.5 top-0.5 h-4 w-4 rounded-full bg-white" />
                   </div>
                 </div>
-                <div className="flex items-center justify-between rounded-xl border border-border bg-elevated p-4 opacity-50">
-                  <span className="text-sm">Sync private data</span>
-                  <div className="relative h-5 w-10 rounded-full bg-border">
-                    <div className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white" />
+                {selectedSource.platform === "slack" ? (
+                  <div className="rounded-xl border border-border bg-elevated p-4">
+                    <div className="text-sm font-semibold text-text-primary">
+                      Private chats and DMs
+                    </div>
+                    <p className="mt-2 text-xs leading-relaxed text-text-secondary">
+                      Sync can auto-join public channels after reinstalling with
+                      `channels:join`. Private channels still need the app to be invited, and
+                      direct messages are limited to conversations the app token is actually
+                      allowed to access.
+                    </p>
                   </div>
-                </div>
+                ) : (
+                  <div className="flex items-center justify-between rounded-xl border border-border bg-elevated p-4 opacity-50">
+                    <span className="text-sm">Sync private data</span>
+                    <div className="relative h-5 w-10 rounded-full bg-border">
+                      <div className="absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white" />
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
             <div className="flex flex-col gap-3 border-t border-border px-5 py-4 sm:flex-row sm:px-8">
-              {selectedSource.platform === "slack" && selectedSource.status === "connected" && (
+              {selectedSource.platform !== "custom" && selectedSource.status === "connected" && (
                 <button
-                  onClick={handleSlackSync}
-                  disabled={connectingId === "slack-sync"}
+                  onClick={() => handleSourceSync(selectedSource)}
+                  disabled={connectingId === `${selectedSource.platform}-sync`}
                   className="flex-1 rounded-xl bg-sync-blue py-3 text-sm font-bold text-white transition-colors hover:bg-sync-blue/90"
                 >
-                  {connectingId === "slack-sync" ? "Syncing..." : "Run Sync Now"}
+                  {connectingId === `${selectedSource.platform}-sync` ? "Syncing..." : "Run Sync Now"}
                 </button>
               )}
               <button

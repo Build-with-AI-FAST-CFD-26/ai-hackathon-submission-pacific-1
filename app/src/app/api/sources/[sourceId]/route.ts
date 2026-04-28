@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { saveSourceConnectionConfig, updateSourceStatus } from "@/lib/sync-repository";
+import {
+  deleteSourceConnectionConfig,
+  saveSourceConnectionConfig,
+  updateSourceStatus,
+} from "@/lib/sync-repository";
 import type { SourcePlatform } from "@/types/sync";
 
 const sourceUpdateSchema = z
@@ -59,5 +63,32 @@ export async function PATCH(
   } catch (error) {
     console.error("Update source route failed", error);
     return NextResponse.json({ error: "Unable to update source." }, { status: 500 });
+  }
+}
+
+export async function DELETE(
+  request: Request,
+  context: { params: Promise<{ sourceId: string }> },
+) {
+  try {
+    const { sourceId } = await context.params;
+    const requestUrl = new URL(request.url);
+    const workspaceId = requestUrl.searchParams.get("workspaceId") ?? undefined;
+
+    await deleteSourceConnectionConfig(sourceId, workspaceId);
+    const source = await updateSourceStatus({
+      sourceId,
+      status: "disconnected",
+      workspaceId,
+    });
+
+    if (!source) {
+      return NextResponse.json({ error: "Source not found." }, { status: 404 });
+    }
+
+    return NextResponse.json({ source });
+  } catch (error) {
+    console.error("Delete source route failed", error);
+    return NextResponse.json({ error: "Unable to disconnect source." }, { status: 500 });
   }
 }

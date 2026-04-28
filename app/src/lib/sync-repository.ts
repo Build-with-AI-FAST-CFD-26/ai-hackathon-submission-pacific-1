@@ -268,6 +268,21 @@ export async function getSourceConnectionConfig(sourceId: string, workspaceId?: 
     .findOne({ sourceId, workspaceId: resolvedWorkspaceId });
 }
 
+export async function deleteSourceConnectionConfig(sourceId: string, workspaceId?: string) {
+  const resolvedWorkspaceId = getWorkspaceId(workspaceId);
+  const db = await getDb();
+
+  if (!db) {
+    getRuntimeWorkspaceState(resolvedWorkspaceId).sourceConfigs.delete(sourceId);
+    return;
+  }
+
+  await ensureSourceCatalog(resolvedWorkspaceId);
+  await db
+    .collection<SourceConnectionConfigRecord>(COLLECTIONS.sourceConfigs)
+    .deleteMany({ sourceId, workspaceId: resolvedWorkspaceId });
+}
+
 export async function updateSourceStatus(params: {
   sourceId: string;
   status: SourceStatus;

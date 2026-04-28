@@ -38,6 +38,11 @@ interface SlackConversation {
   name?: string;
   is_member?: boolean;
   is_archived?: boolean;
+  is_private?: boolean;
+  is_im?: boolean;
+  is_mpim?: boolean;
+  user?: string;
+  members?: string[];
 }
 
 interface SlackMessage {
@@ -350,8 +355,23 @@ async function fetchSlackConversations(accessToken: string) {
   } while (cursor && channels.length < serverEnv.SLACK_SYNC_CHANNEL_LIMIT);
 
   return channels
-    .filter((channel) => !channel.is_archived && channel.is_member !== false)
+    .filter((channel) => !channel.is_archived)
     .slice(0, serverEnv.SLACK_SYNC_CHANNEL_LIMIT);
+}
+
+async function joinSlackConversation(accessToken: string, channelId: string) {
+  await slackApiRequest<{ ok: boolean }>(
+    "https://slack.com/api/conversations.join",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ channel: channelId }).toString(),
+    },
+    "Slack conversations.join failed",
+  );
 }
 
 async function fetchSlackConversationHistory(accessToken: string, channelId: string) {
@@ -372,7 +392,7 @@ async function fetchSlackConversationHistory(accessToken: string, channelId: str
   return payload.messages ?? [];
 }
 
-async function fetchSlackConversationName(accessToken: string, channelId: string) {
+async function fetchSlackConversation(accessToken: string, channelId: string) {
   const url = new URL("https://slack.com/api/conversations.info");
   url.searchParams.set("channel", channelId);
 
@@ -389,11 +409,34 @@ async function fetchSlackConversationName(accessToken: string, channelId: string
     "Slack conversations.info failed",
   );
 
-  return payload.channel?.name ?? channelId;
+  return payload.channel ?? null;
 }
 
 function normalizeSlackText(text?: string) {
   return (text ?? "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function buildConversationDisplayName(
+  conversation: SlackConversation,
+  userMap: Map<string, string>,
+) {
+  if (conversation.is_im) {
+    const otherUserName = conversation.user
+      ? userMap.get(conversation.user) ?? conversation.user
+      : null;
+    return otherUserName ? `DM with ${otherUserName}` : "Direct message";
+  }
+
+  if (conversation.is_mpim) {
+    const memberNames = (conversation.members ?? [])
+      .map((memberId) => userMap.get(memberId) ?? memberId)
+      .slice(0, 3);
+    return memberNames.length > 0
+      ? `Group chat: ${memberNames.join(", ")}`
+      : conversation.name || "Group direct message";
+  }
+
+  return conversation.name ? `#${conversation.name}` : conversation.id;
 }
 
 function toIsoFromSlackTimestamp(timestamp?: string) {
@@ -456,8 +499,18 @@ async function syncSlackInstallation(installation: SlackInstallation) {
   }
 
   for (const channel of channels) {
-    const channelName = channel.name ?? channel.id;
+    const conversationLabel = buildConversationDisplayName(channel, userMap);
+    const tagLabel = channel.name ?? conversationLabel;
     try {
+      if (
+        channel.is_member === false &&
+        !channel.is_private &&
+        !channel.is_im &&
+        !channel.is_mpim
+      ) {
+        await joinSlackConversation(installation.accessToken, channel.id);
+      }
+
       const messages = await fetchSlackConversationHistory(installation.accessToken, channel.id);
 
       for (const message of messages.filter(isIngestibleSlackMessage)) {
@@ -465,7 +518,8 @@ async function syncSlackInstallation(installation: SlackInstallation) {
         const formatted = formatSlackDocument({
           installation,
           channelId: channel.id,
-          channelName,
+          conversationLabel,
+          tagLabel,
           message,
           authorName,
         });
@@ -478,7 +532,7 @@ async function syncSlackInstallation(installation: SlackInstallation) {
         await upsertMemoryItem(formatted.memoryItem);
       }
     } catch (error) {
-      console.warn(`Failed to sync channel ${channelName} (${channel.id}):`, error);
+      console.warn(`Failed to sync conversation ${conversationLabel} (${channel.id}):`, error);
     }
   }
 
@@ -498,7 +552,8 @@ async function syncSlackInstallation(installation: SlackInstallation) {
 function formatSlackDocument(params: {
   installation: SlackInstallation;
   channelId: string;
-  channelName: string;
+  conversationLabel: string;
+  tagLabel: string;
   message: SlackMessage;
   authorName: string;
 }): { document: KnowledgeDocument; memoryItem: MemoryItem } | null {
@@ -515,7 +570,7 @@ function formatSlackDocument(params: {
   const excerpt = text.length > 220 ? `${text.slice(0, 217)}...` : text;
   const titleBase = text.length > 72 ? `${text.slice(0, 69)}...` : text;
   const documentId = `slack-${params.channelId}-${params.message.ts.replace(".", "-")}`;
-  const sourceLabel = `Slack / #${params.channelName}`;
+  const sourceLabel = `Slack / ${params.conversationLabel}`;
   const url = `https://slack.com/app_redirect?channel=${params.channelId}`;
 
   return {
@@ -528,7 +583,7 @@ function formatSlackDocument(params: {
       author: params.authorName,
       content: text,
       excerpt,
-      tags: ["Slack", params.channelName],
+      tags: ["Slack", params.tagLabel],
       createdAt,
       updatedAt: createdAt,
       url,
@@ -538,8 +593,8 @@ function formatSlackDocument(params: {
       workspaceId: params.installation.workspaceId,
       documentId,
       platform: "slack",
-      title: `#${params.channelName}`,
-      sourceLabel: `#${params.channelName}`,
+      title: params.conversationLabel,
+      sourceLabel: params.conversationLabel,
       author: params.authorName,
       createdAt,
       content: excerpt,
@@ -608,12 +663,15 @@ export async function ingestSlackEvent(params: {
   }
 
   const userMap = buildSlackUserMap(await fetchSlackUsers(installation.accessToken));
-  const channelName = await fetchSlackConversationName(installation.accessToken, params.channelId);
+  const conversation =
+    (await fetchSlackConversation(installation.accessToken, params.channelId)) ??
+    ({ id: params.channelId } as SlackConversation);
   const authorName = userMap.get(params.userId ?? "") ?? params.userId ?? "Slack user";
   const formatted = formatSlackDocument({
     installation,
     channelId: params.channelId,
-    channelName,
+    conversationLabel: buildConversationDisplayName(conversation, userMap),
+    tagLabel: conversation.name ?? params.channelId,
     message: {
       ts: params.ts,
       text: params.text,

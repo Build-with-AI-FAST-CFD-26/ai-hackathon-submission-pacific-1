@@ -20,7 +20,7 @@ export const connectorDefinitions: Record<SourcePlatform, ConnectorDefinition> =
   slack: {
     title: "Connect Slack",
     instructions:
-      "Add your Slack app credentials so Sync can start the OAuth flow and ingest channels, threads, and commitments.",
+      "Add your Slack app credentials so Sync can start the OAuth flow, auto-join public channels, and ingest private channels, direct messages, and small private group chats where the app is allowed to access history.",
     confirmLabel: "Continue to Slack",
     statusOnSave: "pending",
     fields: [
@@ -49,9 +49,9 @@ export const connectorDefinitions: Record<SourcePlatform, ConnectorDefinition> =
   gmail: {
     title: "Connect Gmail",
     instructions:
-      "Provide the Google Workspace app details Sync should use for mailbox access and Gmail push watches.",
-    confirmLabel: "Save Gmail Setup",
-    statusOnSave: "connected",
+      "Provide the Google Workspace app details Sync should use for mailbox access, then continue through Google OAuth.",
+    confirmLabel: "Continue to Google",
+    statusOnSave: "pending",
     fields: [
       {
         key: "projectId",
@@ -63,13 +63,13 @@ export const connectorDefinitions: Record<SourcePlatform, ConnectorDefinition> =
         key: "oauthClientId",
         label: "OAuth Client ID",
         placeholder: "Google OAuth client ID",
-        help: "Used when we add the Gmail OAuth install flow.",
+        help: "Used for the Gmail OAuth install flow.",
       },
       {
         key: "oauthClientSecret",
         label: "OAuth Client Secret",
         placeholder: "Google OAuth client secret",
-        help: "Stored for the future Gmail connector handshake.",
+        help: "Used for the Gmail OAuth token exchange after approval.",
         secret: true,
       },
       {
@@ -112,9 +112,9 @@ export const connectorDefinitions: Record<SourcePlatform, ConnectorDefinition> =
   github: {
     title: "Connect GitHub",
     instructions:
-      "Provide the GitHub app values Sync will use to monitor repos, pull requests, issues, and releases.",
-    confirmLabel: "Save GitHub Setup",
-    statusOnSave: "connected",
+      "Provide the GitHub OAuth app values Sync will use to monitor repos, pull requests, issues, and releases, then continue to GitHub.",
+    confirmLabel: "Continue to GitHub",
+    statusOnSave: "pending",
     fields: [
       {
         key: "appId",
@@ -126,13 +126,13 @@ export const connectorDefinitions: Record<SourcePlatform, ConnectorDefinition> =
         key: "clientId",
         label: "Client ID",
         placeholder: "GitHub client ID",
-        help: "Used when the app later adds GitHub OAuth install support.",
+        help: "Used for the GitHub OAuth install flow.",
       },
       {
         key: "clientSecret",
         label: "Client Secret",
         placeholder: "GitHub client secret",
-        help: "Stored for future GitHub OAuth and webhook flows.",
+        help: "Used for the GitHub OAuth token exchange after approval.",
         secret: true,
       },
       {
@@ -145,11 +145,11 @@ export const connectorDefinitions: Record<SourcePlatform, ConnectorDefinition> =
     ],
   },
   whatsapp: {
-    title: "Prepare WhatsApp",
+    title: "Connect WhatsApp",
     instructions:
-      "This connector is still a later-phase integration, but we can collect the Meta setup values now so the backend is ready.",
-    confirmLabel: "Save WhatsApp Setup",
-    statusOnSave: "pending",
+      "Provide the Meta WhatsApp Cloud API values so Sync can validate the business line now and ingest future webhook messages.",
+    confirmLabel: "Validate WhatsApp Setup",
+    statusOnSave: "connected",
     fields: [
       {
         key: "businessAccountId",
@@ -167,7 +167,7 @@ export const connectorDefinitions: Record<SourcePlatform, ConnectorDefinition> =
         key: "permanentToken",
         label: "Permanent Access Token",
         placeholder: "WhatsApp permanent token",
-        help: "Stored for the eventual Cloud API integration.",
+        help: "Used to validate the phone number and receive Cloud API data.",
         secret: true,
       },
       {

@@ -58,7 +58,7 @@ export const serverEnv = {
   SLACK_REDIRECT_URI: data.SLACK_REDIRECT_URI,
   SLACK_SCOPES:
     data.SLACK_SCOPES ??
-    "channels:history,channels:read,groups:history,groups:read,team:read,users:read",
+    "channels:history,channels:read,channels:join,groups:history,groups:read,im:history,im:read,mpim:history,mpim:read,team:read,users:read",
   SLACK_SYNC_CHANNEL_LIMIT: data.SLACK_SYNC_CHANNEL_LIMIT,
   SLACK_SYNC_MESSAGE_LIMIT: data.SLACK_SYNC_MESSAGE_LIMIT,
   SLACK_AUTO_SYNC_MAX_AGE_SECONDS: data.SLACK_AUTO_SYNC_MAX_AGE_SECONDS,
