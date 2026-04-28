@@ -2,6 +2,18 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { exchangeGmailCode, syncGmailWorkspace } from "@/lib/gmail";
 
+function sanitizeGmailError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return "unknown_error";
+  }
+
+  return error.message
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 120) || "unknown_error";
+}
+
 export async function GET(request: Request) {
   const requestUrl = new URL(request.url);
   const code = requestUrl.searchParams.get("code");
@@ -49,7 +61,12 @@ export async function GET(request: Request) {
   } catch (routeError) {
     console.error("Gmail callback route failed", routeError);
     return clearCookies(
-      NextResponse.redirect(new URL("/sources?gmail=failed", requestUrl.origin)),
+      NextResponse.redirect(
+        new URL(
+          `/sources?gmail=failed&gmail_error=${encodeURIComponent(sanitizeGmailError(routeError))}`,
+          requestUrl.origin,
+        ),
+      ),
     );
   }
 }

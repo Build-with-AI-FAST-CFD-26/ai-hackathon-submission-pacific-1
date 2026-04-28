@@ -134,6 +134,7 @@ export function SyncSource() {
 
     for (const provider of providers) {
       const providerState = searchParams.get(provider.key);
+      const providerError = searchParams.get(`${provider.key}_error`);
       if (!providerState) {
         continue;
       }
@@ -156,7 +157,9 @@ export function SyncSource() {
       }
 
       toast.error(`${provider.label} connection was not completed.`, {
-        description: `Reason: ${providerState.replace(/_/g, " ")}`,
+        description: providerError
+          ? `Reason: ${providerError.replace(/_/g, " ")}`
+          : `Reason: ${providerState.replace(/_/g, " ")}`,
       });
       return;
     }

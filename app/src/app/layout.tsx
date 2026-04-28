@@ -33,7 +33,10 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body className={`${inter.variable} ${jetbrains.variable} font-sans antialiased`}>
+      <body
+        suppressHydrationWarning
+        className={`${inter.variable} ${jetbrains.variable} font-sans antialiased`}
+      >
         <Providers>
           {children}
         </Providers>
